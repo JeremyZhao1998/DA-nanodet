@@ -1,4 +1,5 @@
 # Copyright 2021 RangiLyu.
+# Modified by Zijing Zhao, 2023.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,35 +13,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import copy
 import warnings
 
-from .coco import CocoDataset
-from .xml_dataset import XMLDataset
-from .yolo import YoloDataset
+from .coco import CocoDataset, CocoDatasetTeaching
 
 
-def build_dataset(cfg, mode):
+def build_dataset(cfg, mode, data_root=None, teaching=False):
     dataset_cfg = copy.deepcopy(cfg)
     name = dataset_cfg.pop("name")
-    if name == "coco":
-        warnings.warn(
-            "Dataset name coco has been deprecated. Please use CocoDataset instead."
-        )
+    if data_root is not None:
+        for key in dataset_cfg:
+            if key.endswith('path'):
+                dataset_cfg[key] = os.path.join(data_root, dataset_cfg[key])
+    if name == "CocoDataset":
+        if teaching:
+            return CocoDatasetTeaching(mode=mode, **dataset_cfg)
         return CocoDataset(mode=mode, **dataset_cfg)
-    elif name == "yolo":
-        return YoloDataset(mode=mode, **dataset_cfg)
-    elif name == "xml_dataset":
-        warnings.warn(
-            "Dataset name xml_dataset has been deprecated. "
-            "Please use XMLDataset instead."
-        )
-        return XMLDataset(mode=mode, **dataset_cfg)
-    elif name == "CocoDataset":
-        return CocoDataset(mode=mode, **dataset_cfg)
-    elif name == "YoloDataset":
-        return YoloDataset(mode=mode, **dataset_cfg)
-    elif name == "XMLDataset":
-        return XMLDataset(mode=mode, **dataset_cfg)
     else:
+        warnings.warn(
+            "DA-nanodet now only support COCO-style dataset"
+        )
         raise NotImplementedError("Unknown dataset type!")

@@ -1,5 +1,5 @@
 
-save_dir: outputs/city2foggy
+save_dir: outputs/tencent_weather_source
 model:
   arch:
     name: OneStageDetector
@@ -16,7 +16,7 @@ model:
       num_outs: 3
     head:
       name: NanoDetHead
-      num_classes: 8
+      num_classes: 4
       input_channel: 96
       feat_channels: 96
       stacked_convs: 2
@@ -40,11 +40,12 @@ model:
           name: GIoULoss
           loss_weight: 2.0
 data:
+  data_root: /S1/MIPL/zhaozj/data
   train:
     name: CocoDataset
-    img_path: /network_space/storage43/zhaozijing/datasets/cityscapes/leftImg8bit/train
-    ann_path: /network_space/storage43/zhaozijing/datasets/cityscapes/annotations/cityscapes_train_cocostyle.json
-    input_size: [320,320] #[w,h]
+    img_path: tencent/day_sunny
+    ann_path: tencent/day_sunny/annotations/train_coco_style.json
+    input_size: [448,256] #[w,h]
     keep_ratio: True
     pipeline:
       perspective: 0.0
@@ -60,29 +61,29 @@ data:
       normalize: [[103.53, 116.28, 123.675], [57.375, 57.12, 58.395]]
   val:
     name: CocoDataset
-    img_path: /network_space/storage43/zhaozijing/datasets/foggy_cityscapes/leftImg8bit_foggy/val
-    ann_path: /network_space/storage43/zhaozijing/datasets/foggy_cityscapes/annotations/cityscapes_foggy_val_cocostyle.json
-    input_size: [320,320] #[w,h]
+    img_path: tencent/day_sunny
+    ann_path: tencent/day_sunny/annotations/val_coco_style.json
+    input_size: [448,256] #[w,h]
     keep_ratio: True
     pipeline:
       normalize: [[103.53, 116.28, 123.675], [57.375, 57.12, 58.395]]
 device:
   gpu_ids: [0,1]
   workers_per_gpu: 8
-  batchsize_per_gpu: 32
+  batchsize_per_gpu: 24
 schedule:
-#  resume:
   load_model: ./checkpoints/nanodet_m_0.5x.ckpt
+  # load_model: ./outputs/tencent_day_sunny/model_best/model_best.ckpt
   optimizer:
     name: SGD
-    lr: 0.03 # lr: 0.07
+    lr: 0.05 # lr: 0.07
     momentum: 0.9
     weight_decay: 0.0001
   warmup:
     name: linear
     steps: 1000
     ratio: 0.00001
-  total_epochs: 180
+  total_epochs: 200
   lr_schedule:
     name: MultiStepLR
     milestones: [130,160,175]
@@ -95,4 +96,4 @@ evaluator:
 log:
   interval: 50
 
-class_names: ['person', 'car', 'train', 'rider', 'truck', 'motorcycle', 'bicycle', 'bus']
+class_names: ['pedestrian', 'sign', 'vehicle', 'arrow']

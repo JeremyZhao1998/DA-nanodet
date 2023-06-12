@@ -1,4 +1,5 @@
 # Copyright 2021 RangiLyu.
+# Modified by Zijing Zhao, 2023.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +14,7 @@
 # limitations under the License.
 
 import os
+from typing import Tuple, Dict, Optional
 
 import cv2
 import numpy as np
@@ -20,9 +22,11 @@ import torch
 from pycocotools.coco import COCO
 
 from .base import BaseDataset
+from ..transform.color import normalize
 
 
 class CocoDataset(BaseDataset):
+
     def get_data_info(self, ann_path):
         """
         Load basic information of dataset such as image path, label and so on.
@@ -49,8 +53,8 @@ class CocoDataset(BaseDataset):
         img_info = self.coco_api.loadImgs(self.img_ids)
         return img_info
 
-    def get_per_img_info(self, idx):
-        img_info = self.data_info[idx]
+    @staticmethod
+    def _get_per_img_info(img_info):
         file_name = img_info["file_name"]
         height = img_info["height"]
         width = img_info["width"]
@@ -59,6 +63,38 @@ class CocoDataset(BaseDataset):
             raise TypeError("Image id must be int.")
         info = {"file_name": file_name, "height": height, "width": width, "id": id}
         return info
+
+    def _get_img_annotation(self, idx, img_ids, coco_api):
+        img_id = img_ids[idx]
+        ann_ids = coco_api.getAnnIds([img_id])
+        anns = coco_api.loadAnns(ann_ids)
+        gt_bboxes, gt_labels, gt_bboxes_ignore = [], [], []
+        for ann in anns:
+            x1, y1, w, h = ann["bbox"]
+            if ann["area"] <= 0 or w < 1 or h < 1:
+                continue
+            if ann["category_id"] not in self.cat_ids:
+                continue
+            bbox = [x1, y1, x1 + w, y1 + h]
+            if ann.get("iscrowd", False) or ann.get("ignore", False):
+                gt_bboxes_ignore.append(bbox)
+            else:
+                gt_bboxes.append(bbox)
+                gt_labels.append(self.cat2label[ann["category_id"]])
+        if gt_bboxes:
+            gt_bboxes = np.array(gt_bboxes, dtype=np.float32)
+            gt_labels = np.array(gt_labels, dtype=np.int64)
+        else:
+            gt_bboxes = np.zeros((0, 4), dtype=np.float32)
+            gt_labels = np.array([], dtype=np.int64)
+        if gt_bboxes_ignore:
+            gt_bboxes_ignore = np.array(gt_bboxes_ignore, dtype=np.float32)
+        else:
+            gt_bboxes_ignore = np.zeros((0, 4), dtype=np.float32)
+        annotation = dict(
+            bboxes=gt_bboxes, labels=gt_labels, bboxes_ignore=gt_bboxes_ignore
+        )
+        return annotation
 
     def get_img_annotation(self, idx):
         """
@@ -114,20 +150,17 @@ class CocoDataset(BaseDataset):
                 annotation["keypoints"] = np.zeros((0, 51), dtype=np.float32)
         return annotation
 
-    def get_train_data(self, idx):
-        """
-        Load image and annotation
-        :param idx:
-        :return: meta-data (a dict containing image, annotation and other information)
-        """
-        img_info = self.get_per_img_info(idx)
+    def _get_train_data(self, idx, data_info, img_ids, coco_api):
+        if idx >= len(data_info):
+            idx = idx % len(data_info)
+        img_info = self._get_per_img_info(data_info[idx])
         file_name = img_info["file_name"]
         image_path = os.path.join(self.img_path, file_name)
         img = cv2.imread(image_path)
         if img is None:
             print("image {} read failed.".format(image_path))
             raise FileNotFoundError("Cant load image! Please check image path!")
-        ann = self.get_img_annotation(idx)
+        ann = self._get_img_annotation(idx, img_ids, coco_api)
         meta = dict(
             img=img,
             img_info=img_info,
@@ -135,17 +168,19 @@ class CocoDataset(BaseDataset):
             gt_labels=ann["labels"],
             gt_bboxes_ignore=ann["bboxes_ignore"],
         )
-        if self.use_instance_mask:
-            meta["gt_masks"] = ann["masks"]
-        if self.use_keypoint:
-            meta["gt_keypoints"] = ann["keypoints"]
+        return meta
 
+    def get_train_data(self, idx):
+        """
+        Load image and annotation
+        :param idx:
+        :return: meta-data (a dict containing image, annotation and other information)
+        """
+        meta = self._get_train_data(idx, self.data_info, self.img_ids, self.coco_api)
         input_size = self.input_size
         if self.multi_scale:
             input_size = self.get_random_size(self.multi_scale, input_size)
-
-        meta = self.pipeline(self, meta, input_size)
-
+        _, meta = self.pipeline(self, meta, input_size)
         meta["img"] = torch.from_numpy(meta["img"].transpose(2, 0, 1))
         return meta
 
@@ -158,3 +193,46 @@ class CocoDataset(BaseDataset):
         """
         # TODO: support TTA
         return self.get_train_data(idx)
+
+
+class CocoDatasetTeaching(CocoDataset):
+
+    def __init__(self,
+                 img_path: str,
+                 ann_path: str,
+                 tgt_img_path: str,
+                 tgt_ann_path: str,
+                 input_size: Tuple[int, int],
+                 pipeline: Dict,
+                 keep_ratio: bool = True,
+                 use_instance_mask: bool = False,
+                 use_seg_mask: bool = False,
+                 use_keypoint: bool = False,
+                 load_mosaic: bool = False,
+                 mode: str = "train",
+                 multi_scale: Optional[Tuple[float, float]] = None):
+        super().__init__(img_path, ann_path, input_size, pipeline, keep_ratio, use_instance_mask, use_seg_mask,
+                         use_keypoint, load_mosaic, mode, multi_scale)
+        self.tgt_img_path = tgt_img_path
+        self.tgt_ann_path = tgt_ann_path
+        self.tgt_coco_api = COCO(tgt_ann_path)
+        self.tgt_img_ids = sorted(self.tgt_coco_api.imgs.keys())
+        self.tgt_data_info = self.coco_api.loadImgs(self.tgt_img_ids)
+
+    def get_train_data(self, idx):
+        meta = self._get_train_data(idx, self.data_info, self.img_ids, self.coco_api)
+        tgt_meta = self._get_train_data(idx, self.tgt_data_info, self.tgt_img_ids, self.tgt_coco_api)
+        input_size = self.input_size
+        if self.multi_scale:
+            input_size = self.get_random_size(self.multi_scale, input_size)
+        _, meta = self.pipeline(self, meta, input_size)
+        tgt_meta_teacher, tgt_meta_student = self.pipeline(self, tgt_meta, input_size)
+        tgt_meta_teacher = self.pipeline.normalize(tgt_meta_teacher)
+        meta["img"] = torch.from_numpy(meta["img"].transpose(2, 0, 1))
+        tgt_meta_student["img"] = torch.from_numpy(tgt_meta_student["img"].transpose(2, 0, 1))
+        tgt_meta_teacher["img"] = torch.from_numpy(tgt_meta_teacher["img"].transpose(2, 0, 1))
+        for key in tgt_meta_student.keys():
+            tgt_stu_key, tgt_tch_key = key + '_tgt_stu', key + '_tgt_tch'
+            meta[tgt_stu_key] = tgt_meta_student[key]
+            meta[tgt_tch_key] = tgt_meta_teacher[key]
+        return meta

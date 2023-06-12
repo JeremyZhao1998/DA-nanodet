@@ -1,4 +1,5 @@
 # Copyright 2021 RangiLyu.
+# Modified by Zijing Zhao, 2023.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,7 +19,7 @@ from typing import Dict, Tuple
 
 from torch.utils.data import Dataset
 
-from .color import color_aug_and_norm
+from .color import color_aug_and_norm, normalize
 from .warp import ShapeTransform, warp_and_resize
 
 
@@ -52,8 +53,12 @@ class Pipeline:
     def __init__(self, cfg: Dict, keep_ratio: bool):
         self.shape_transform = ShapeTransform(keep_ratio, **cfg)
         self.color = functools.partial(color_aug_and_norm, kwargs=cfg)
+        self.mean, self.std = cfg['normalize']
+
+    def normalize(self, meta: Dict):
+        return normalize(meta, self.mean, self.std)
 
     def __call__(self, dataset: Dataset, meta: Dict, dst_shape: Tuple[int, int]):
-        meta = self.shape_transform(meta, dst_shape=dst_shape)
-        meta = self.color(meta=meta)
-        return meta
+        meta_shape = self.shape_transform(meta, dst_shape=dst_shape)
+        meta = self.color(meta=meta_shape)
+        return meta_shape, meta

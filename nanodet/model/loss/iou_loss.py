@@ -1,5 +1,6 @@
 # Modification 2020 RangiLyu
 # Copyright 2018-2019 Open-MMLab.
+# Modified by Zijing Zhao, 2023
 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -83,8 +84,8 @@ def bbox_overlaps(bboxes1, bboxes2, mode="iou", is_aligned=False, eps=1e-6):
     assert bboxes1.shape[:-2] == bboxes2.shape[:-2]
     batch_shape = bboxes1.shape[:-2]
 
-    rows = bboxes1.size(-2)
-    cols = bboxes2.size(-2)
+    rows = 0 if bboxes1.size(0) == 0 else bboxes1.size(-2)
+    cols = 0 if bboxes2.size(0) == 0 else bboxes2.size(-2)
     if is_aligned:
         assert rows == cols
 

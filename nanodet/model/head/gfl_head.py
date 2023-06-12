@@ -1,3 +1,5 @@
+# Modified by Zijing Zhao, 2023.
+
 import math
 
 import cv2
@@ -532,7 +534,7 @@ class GFLHead(nn.Module):
             pos_gt_bboxes = gt_bboxes[pos_assigned_gt_inds, :]
         return pos_inds, neg_inds, pos_gt_bboxes, pos_assigned_gt_inds
 
-    def post_process(self, preds, meta):
+    def post_process(self, preds, meta, pseudo=False):
         cls_scores, bbox_preds = preds.split(
             [self.num_classes, 4 * (self.reg_max + 1)], dim=-1
         )
@@ -565,9 +567,10 @@ class GFLHead(nn.Module):
             det_result = {}
             det_bboxes, det_labels = result
             det_bboxes = det_bboxes.detach().cpu().numpy()
-            det_bboxes[:, :4] = warp_boxes(
-                det_bboxes[:, :4], np.linalg.inv(warp_matrix), img_width, img_height
-            )
+            if not pseudo:
+                det_bboxes[:, :4] = warp_boxes(
+                    det_bboxes[:, :4], np.linalg.inv(warp_matrix), img_width, img_height
+                )
             classes = det_labels.detach().cpu().numpy()
             for i in range(self.num_classes):
                 inds = classes == i

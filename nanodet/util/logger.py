@@ -1,4 +1,5 @@
 # Copyright 2021 RangiLyu.
+# Modified by Zijing Zhao, 2023.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,6 +25,26 @@ from pytorch_lightning.utilities import rank_zero_only
 from termcolor import colored
 
 from .path import mkdir
+
+
+def set_print():
+    import builtins as __builtin__
+    builtin_print = __builtin__.print
+    import warnings as __warnings__
+    warnings_warn = __warnings__.warn
+
+    def print(*args, **kwargs):
+        force = kwargs.pop('force', False)
+        if int(os.environ["LOCAL_RANK"]) == 0 or force:
+            builtin_print(*args, **kwargs)
+
+    def warn(*args, **kwargs):
+        force = kwargs.pop('force', False)
+        if int(os.environ["LOCAL_RANK"]) == 0 or force:
+            warnings_warn(*args, **kwargs)
+
+    __builtin__.print = print
+    __warnings__.warn = warn
 
 
 class Logger:

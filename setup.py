@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 from setuptools import find_packages, setup
+from nanodet import __author__, __author_email__, __docs__, __homepage__, __version__, __modifier__, __modifier_email__
 
-from nanodet import __author__, __author_email__, __docs__, __homepage__, __version__
 
 if __name__ == "__main__":
     setup(
@@ -11,6 +11,8 @@ if __name__ == "__main__":
         url=__homepage__,
         author=__author__,
         author_email=__author_email__,
+        modifier=__modifier__,
+        modifier_email=__modifier_email__,
         keywords="deep learning",
         packages=find_packages(exclude=("config", "tools", "demo")),
         classifiers=[

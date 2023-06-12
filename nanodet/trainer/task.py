@@ -1,4 +1,5 @@
 # Copyright 2021 RangiLyu.
+# Modified by Zijing Zhao, 2023.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,6 +23,7 @@ import torch
 import torch.distributed as dist
 from pytorch_lightning import LightningModule
 from pytorch_lightning.utilities import rank_zero_only
+import numpy as np
 
 from nanodet.data.batch_process import stack_batch_img
 from nanodet.optim import build_optimizer
@@ -73,10 +75,7 @@ class TrainingTask(LightningModule):
         results = self.model.head.post_process(preds, batch)
         return results
 
-    def training_step(self, batch, batch_idx):
-        batch = self._preprocess_batch_input(batch)
-        preds, loss, loss_states = self.model.forward_train(batch)
-
+    def log_training_losses(self, batch_idx, loss_states):
         # log train losses
         if self.global_step % self.cfg.log.interval == 0:
             memory = (
@@ -105,6 +104,10 @@ class TrainingTask(LightningModule):
                 )
             self.logger.info(log_msg)
 
+    def training_step(self, batch, batch_idx):
+        batch = self._preprocess_batch_input(batch)
+        preds, loss, loss_states = self.model.forward_train(batch)
+        self.log_training_losses(batch_idx, loss_states)
         return loss
 
     def training_epoch_end(self, outputs: List[Any]) -> None:
@@ -347,3 +350,57 @@ class TrainingTask(LightningModule):
                 )
                 self.weight_averager.load_state_dict(avg_params)
                 self.logger.info("Loaded average state from checkpoint.")
+
+
+class TeachingTask(TrainingTask):
+
+    def __init__(self, cfg, evaluator=None):
+        super().__init__(cfg, evaluator)
+        self.teacher = build_model(cfg.model)
+        for param in self.teacher.parameters():
+            param.requires_grad = False
+        self.threshold = cfg.threshold
+        self.ema_alpha = cfg.ema_alpha
+
+    def training_step(self, batch, batch_idx):
+        # Pre-process batch
+        batch_tgt_stu, batch_tgt_tch = {}, {}
+        original_keys = list(batch.keys())
+        for key in original_keys:
+            if key.endswith('tgt_stu'):
+                batch_tgt_stu[key[:-8]] = batch.pop(key)
+            if key.endswith('tgt_tch'):
+                batch_tgt_tch[key[:-8]] = batch.pop(key)
+        batch = self._preprocess_batch_input(batch)
+        batch_tgt_tch = self._preprocess_batch_input(batch_tgt_tch)
+        batch_tgt_stu = self._preprocess_batch_input(batch_tgt_stu)
+        # Teacher forward
+        with torch.no_grad():
+            # EMA
+            state_dict, student_state_dict = self.teacher.state_dict(), self.model.state_dict()
+            for key, value in state_dict.items():
+                state_dict[key] = self.ema_alpha * value + (1 - self.ema_alpha) * student_state_dict[key].detach()
+            self.teacher.load_state_dict(state_dict)
+            # Teacher forward
+            preds_tgt_tch, _, _ = self.teacher.forward_train(batch_tgt_tch)
+            dets_tgt_tch = self.teacher.head.post_process(preds_tgt_tch, batch_tgt_tch, pseudo=True)
+            # Select pseudo labels
+            pseudo_boxes, pseudo_labels = [], []
+            for img_id, value in dets_tgt_tch.items():
+                img_box, img_label = [], []
+                for label, data in value.items():
+                    for proposal in data:
+                        if proposal[4] > self.threshold:
+                            img_box.append(proposal[:4])
+                            img_label.append(label)
+                pseudo_boxes.append(np.asarray(img_box, dtype=np.float32))
+                pseudo_labels.append(np.asarray(img_label, dtype=np.int64))
+            batch_tgt_stu['gt_bboxes'] = pseudo_boxes
+            batch_tgt_stu['gt_labels'] = pseudo_labels
+        # Student forward
+        preds, loss, loss_states = self.model.forward_train(batch)
+        preds_tgt_stu, loss_tgt_stu, loss_states_tgt_stu = self.model.forward_train(batch_tgt_stu)
+        loss += loss_tgt_stu
+        loss_states['loss_tgt'] = loss_tgt_stu
+        self.log_training_losses(batch_idx, loss_states)
+        return loss

@@ -1,4 +1,5 @@
 # Copyright 2021 RangiLyu.
+# Modified by Zijing Zhao, 2023.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +14,7 @@
 # limitations under the License.
 
 import random
+from copy import deepcopy
 
 import cv2
 import numpy as np
@@ -36,13 +38,14 @@ def random_saturation(img, alpha_low, alpha_up):
 
 
 def normalize(meta, mean, std):
+    meta_new = deepcopy(meta)
     img = meta["img"].astype(np.float32)
     mean = np.array(mean, dtype=np.float64).reshape(1, -1)
     stdinv = 1 / np.array(std, dtype=np.float64).reshape(1, -1)
     cv2.subtract(img, mean, img)
     cv2.multiply(img, stdinv, img)
-    meta["img"] = img
-    return meta
+    meta_new["img"] = img
+    return meta_new
 
 
 def _normalize(img, mean, std):
@@ -53,6 +56,7 @@ def _normalize(img, mean, std):
 
 
 def color_aug_and_norm(meta, kwargs):
+    meta_new = deepcopy(meta)
     img = meta["img"].astype(np.float32) / 255
 
     if "brightness" in kwargs and random.randint(0, 1):
@@ -63,8 +67,9 @@ def color_aug_and_norm(meta, kwargs):
 
     if "saturation" in kwargs and random.randint(0, 1):
         img = random_saturation(img, *kwargs["saturation"])
+
     # cv2.imshow('trans', img)
     # cv2.waitKey(0)
     img = _normalize(img, *kwargs["normalize"])
-    meta["img"] = img
-    return meta
+    meta_new["img"] = img
+    return meta_new

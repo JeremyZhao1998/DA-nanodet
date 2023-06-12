@@ -1,4 +1,5 @@
 # Copyright 2021 RangiLyu.
+# Modified by Zijing Zhao, 2023.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import random
 from abc import ABCMeta, abstractmethod
 from typing import Dict, Optional, Tuple
@@ -70,7 +72,9 @@ class BaseDataset(Dataset, metaclass=ABCMeta):
         self.load_mosaic = load_mosaic
         self.multi_scale = multi_scale
         self.mode = mode
-
+        # For CocoDataset only
+        self.coco_api, self.cat_ids, self.cat2label = None, None, None
+        self.cats, self.class_names, self.img_ids = None, None, None
         self.data_info = self.get_data_info(ann_path)
 
     def __len__(self):
