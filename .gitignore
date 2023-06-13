@@ -164,4 +164,4 @@ outputs/
 checkpoints/
 
 # Slurm files
-.slurm
+run.slurm

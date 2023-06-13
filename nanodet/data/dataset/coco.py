@@ -150,12 +150,12 @@ class CocoDataset(BaseDataset):
                 annotation["keypoints"] = np.zeros((0, 51), dtype=np.float32)
         return annotation
 
-    def _get_train_data(self, idx, data_info, img_ids, coco_api):
+    def _get_train_data(self, idx, data_info, img_ids, coco_api, img_path):
         if idx >= len(data_info):
             idx = idx % len(data_info)
         img_info = self._get_per_img_info(data_info[idx])
         file_name = img_info["file_name"]
-        image_path = os.path.join(self.img_path, file_name)
+        image_path = os.path.join(img_path, file_name)
         img = cv2.imread(image_path)
         if img is None:
             print("image {} read failed.".format(image_path))
@@ -176,7 +176,7 @@ class CocoDataset(BaseDataset):
         :param idx:
         :return: meta-data (a dict containing image, annotation and other information)
         """
-        meta = self._get_train_data(idx, self.data_info, self.img_ids, self.coco_api)
+        meta = self._get_train_data(idx, self.data_info, self.img_ids, self.coco_api, self.img_path)
         input_size = self.input_size
         if self.multi_scale:
             input_size = self.get_random_size(self.multi_scale, input_size)
@@ -217,11 +217,11 @@ class CocoDatasetTeaching(CocoDataset):
         self.tgt_ann_path = tgt_ann_path
         self.tgt_coco_api = COCO(tgt_ann_path)
         self.tgt_img_ids = sorted(self.tgt_coco_api.imgs.keys())
-        self.tgt_data_info = self.coco_api.loadImgs(self.tgt_img_ids)
+        self.tgt_data_info = self.tgt_coco_api.loadImgs(self.tgt_img_ids)
 
     def get_train_data(self, idx):
-        meta = self._get_train_data(idx, self.data_info, self.img_ids, self.coco_api)
-        tgt_meta = self._get_train_data(idx, self.tgt_data_info, self.tgt_img_ids, self.tgt_coco_api)
+        meta = self._get_train_data(idx, self.data_info, self.img_ids, self.coco_api, self.img_path)
+        tgt_meta = self._get_train_data(idx, self.tgt_data_info, self.tgt_img_ids, self.tgt_coco_api, self.tgt_img_path)
         input_size = self.input_size
         if self.multi_scale:
             input_size = self.get_random_size(self.multi_scale, input_size)
