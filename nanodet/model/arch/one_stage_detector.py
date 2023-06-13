@@ -58,9 +58,9 @@ class OneStageDetector(nn.Module):
             print("decode time: {:.3f}s".format((time.time() - time2)), end=" | ")
         return results
 
-    def forward_train(self, gt_meta):
+    def forward_train(self, gt_meta, pseudo=False):
         preds = self(gt_meta["img"])
-        loss, loss_states = self.head.loss(preds, gt_meta)
+        loss, loss_states = self.head.loss(preds, gt_meta, pseudo)
 
         return preds, loss, loss_states
 

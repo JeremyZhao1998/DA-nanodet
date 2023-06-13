@@ -80,7 +80,7 @@ def set_device():
     if devices and len(devices) > 1:
         strategy = "ddp"
         env_utils.set_multi_processing(distributed=True)
-        set_print()
+        # set_print()
     return accelerator, devices, strategy, precision
 
 

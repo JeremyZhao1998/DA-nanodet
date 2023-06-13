@@ -118,7 +118,10 @@ class TrainingTask(LightningModule):
         if self.weight_averager is not None:
             preds, loss, loss_states = self.avg_model.forward_train(batch)
         else:
-            preds, loss, loss_states = self.model.forward_train(batch)
+            if hasattr(self, "teacher"):
+                preds, loss, loss_states = self.teacher.forward_train(batch)
+            else:
+                preds, loss, loss_states = self.model.forward_train(batch)
 
         if batch_idx % self.cfg.log.interval == 0:
             memory = (
@@ -140,7 +143,10 @@ class TrainingTask(LightningModule):
                 )
             self.logger.info(log_msg)
 
-        dets = self.model.head.post_process(preds, batch)
+        if hasattr(self, "teacher"):
+            dets = self.teacher.head.post_process(preds, batch)
+        else:
+            dets = self.model.head.post_process(preds, batch)
         return dets
 
     def validation_epoch_end(self, validation_step_outputs):
@@ -385,8 +391,9 @@ class TeachingTask(TrainingTask):
             preds_tgt_tch, _, _ = self.teacher.forward_train(batch_tgt_tch)
             dets_tgt_tch = self.teacher.head.post_process(preds_tgt_tch, batch_tgt_tch, pseudo=True)
             # Select pseudo labels
-            pseudo_boxes, pseudo_labels = [], []
-            for img_id, value in dets_tgt_tch.items():
+            img_ids, pseudo_boxes, pseudo_labels = [], [], []
+            for img_id, value in dets_tgt_tch:
+                img_ids.append(img_id)
                 img_box, img_label = [], []
                 for label, data in value.items():
                     for proposal in data:
@@ -399,7 +406,7 @@ class TeachingTask(TrainingTask):
             batch_tgt_stu['gt_labels'] = pseudo_labels
         # Student forward
         preds, loss, loss_states = self.model.forward_train(batch)
-        preds_tgt_stu, loss_tgt_stu, loss_states_tgt_stu = self.model.forward_train(batch_tgt_stu)
+        preds_tgt_stu, loss_tgt_stu, loss_states_tgt_stu = self.model.forward_train(batch_tgt_stu, pseudo=True)
         loss += loss_tgt_stu
         loss_states['loss_tgt'] = loss_tgt_stu
         self.log_training_losses(batch_idx, loss_states)

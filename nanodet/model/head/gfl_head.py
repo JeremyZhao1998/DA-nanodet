@@ -207,7 +207,7 @@ class GFLHead(nn.Module):
         outputs = torch.cat(outputs, dim=2).permute(0, 2, 1)
         return outputs
 
-    def loss(self, preds, gt_meta):
+    def loss(self, preds, gt_meta, pseudo=False):
         cls_scores, bbox_preds = preds.split(
             [self.num_classes, 4 * (self.reg_max + 1)], dim=-1
         )
@@ -281,8 +281,12 @@ class GFLHead(nn.Module):
             loss_bbox = sum(losses_bbox)
             loss_dfl = sum(losses_dfl)
 
-        loss = loss_qfl + loss_bbox + loss_dfl
-        loss_states = dict(loss_qfl=loss_qfl, loss_bbox=loss_bbox, loss_dfl=loss_dfl)
+        if pseudo:
+            loss = loss_qfl
+            loss_states = dict(loss_qfl=loss_qfl)
+        else:
+            loss = loss_qfl + loss_bbox + loss_dfl
+            loss_states = dict(loss_qfl=loss_qfl, loss_bbox=loss_bbox, loss_dfl=loss_dfl)
 
         return loss, loss_states
 
@@ -540,6 +544,7 @@ class GFLHead(nn.Module):
         )
         result_list = self.get_bboxes(cls_scores, bbox_preds, meta)
         det_results = {}
+        det_results_list = []
         warp_matrixes = (
             meta["warp_matrix"]
             if isinstance(meta["warp_matrix"], list)
@@ -582,6 +587,9 @@ class GFLHead(nn.Module):
                     axis=1,
                 ).tolist()
             det_results[img_id] = det_result
+            det_results_list.append((img_id, det_result))
+        if pseudo:
+            return det_results_list
         return det_results
 
     def show_result(
