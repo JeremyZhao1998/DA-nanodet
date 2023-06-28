@@ -80,21 +80,22 @@ We use the autonomous driving images captured in sunny daytime as source dataset
 
 ## Training
 
-1. **Start training**
+**Start training**
 
-   NanoDet is now using [pytorch lightning](https://github.com/PyTorchLightning/pytorch-lightning) for training. For both single-GPU or multiple-GPUs, run:
+NanoDet is now using [pytorch lightning](https://github.com/PyTorchLightning/pytorch-lightning) for training. 
+For both single-GPU or multiple-GPUs, run:
 
+   ```bash
+   python tools/train.py CONFIG_FILE_PATH
    ```
-python tools/train.py CONFIG_FILE_PATH
-   ```
-   
-2. **Visualize Logs**
 
-   TensorBoard logs are saved in `save_dir` which you set in config file.
+**Visualize Logs**
 
-   To visualize tensorboard logs, run:
+   TensorBoard logs are saved in `save_dir` which you set in config file. To visualize tensorboard logs, run:
 
-   ```
+   ```bash
    cd <YOUR_SAVE_DIR>
    tensorboard --logdir ./
    ```
+    
+Then open `http://localhost:6006` in your browser, you can see the training curves.
