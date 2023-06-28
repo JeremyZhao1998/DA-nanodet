@@ -25,26 +25,26 @@ We perform unsupervised domain adaptation, i.e. trained on labeled source domain
  conda activate nanodet
 ```
 
-1. Install pytorch
+2. Install pytorch
 
 ```bash
 conda install pytorch torchvision cudatoolkit=11.1 -c pytorch -c conda-forge
 ```
 
-1. Clone this repository
+3. Clone this repository
 
 ```bash
 git clone https://github.com/JeremyZhao1998/DA-nanodet.git
 cd DA-nanodet
 ```
 
-1. Install requirements
+4. Install requirements
 
 ```bash
 pip install -r requirements.txt
 ```
 
-1. Setup NanoDet
+5. Setup NanoDet
 
 ```bash
 python setup.py develop
@@ -66,7 +66,15 @@ Our domain adaptation method invloves additional components only during training
 
 ## Dataset
 
-We use the autonomous driving images captured in sunny daytime as source dataset, and use the overcast daytime, light rain daytime, heavy rain daytime and clear night as target dataset.
+We use the autonomous driving images captured in sunny daytime as source dataset, and use the overcast daytime, light rain daytime, heavy rain daytime and clear night as target dataset. We evaluate and report the AP@50 metric.
+
+**Sunny -> Heavy rain:**
+
+|                       | pedestrian | vehicle | sign | arrow | mean |
+| --------------------- | ---------- | ------- | ---- | ----- | ---- |
+| Source only           | 16.5       | 51.5    | 30.7 | 25.8  | 31.1 |
+| DA(Teacher)           | 17.7       | 62.1    | 33.1 | 30.2  | 35.8 |
+| Oracle(source+target) | 42.0       | 75.2    | 42.0 | 35.5  | 48.7 |
 
 
 
@@ -74,14 +82,12 @@ We use the autonomous driving images captured in sunny daytime as source dataset
 
 1. **Start training**
 
-   NanoDet is now using [pytorch lightning](https://github.com/PyTorchLightning/pytorch-lightning) for training.
-
-   For both single-GPU or multiple-GPUs, run:
+   NanoDet is now using [pytorch lightning](https://github.com/PyTorchLightning/pytorch-lightning) for training. For both single-GPU or multiple-GPUs, run:
 
    ```
-   python tools/train.py CONFIG_FILE_PATH
+python tools/train.py CONFIG_FILE_PATH
    ```
-
+   
 2. **Visualize Logs**
 
    TensorBoard logs are saved in `save_dir` which you set in config file.

@@ -37,13 +37,13 @@ class OneStageDetector(nn.Module):
             self.head = build_head(head_cfg)
         self.epoch = 0
 
-    def forward(self, x):
-        x = self.backbone(x)
+    def forward(self, x, return_features=False):
+        features = self.backbone(x)
         if hasattr(self, "fpn"):
-            x = self.fpn(x)
+            features = self.fpn(features)
         if hasattr(self, "head"):
-            x = self.head(x)
-        return x
+            x = self.head(features)
+        return (x, features) if return_features else x
 
     def inference(self, meta):
         with torch.no_grad():
@@ -58,9 +58,9 @@ class OneStageDetector(nn.Module):
             print("decode time: {:.3f}s".format((time.time() - time2)), end=" | ")
         return results
 
-    def forward_train(self, gt_meta, pseudo=False):
-        preds = self(gt_meta["img"])
-        loss, loss_states = self.head.loss(preds, gt_meta, pseudo)
+    def forward_train(self, gt_meta, pseudo=False, return_features=False):
+        preds = self(gt_meta["img"], return_features)
+        loss, loss_states = self.head.loss(preds[0] if return_features else preds, gt_meta, pseudo)
 
         return preds, loss, loss_states
 

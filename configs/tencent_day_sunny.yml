@@ -1,5 +1,6 @@
 
 save_dir: outputs/tencent_weather_source
+mode: source_only
 model:
   arch:
     name: OneStageDetector
@@ -40,7 +41,7 @@ model:
           name: GIoULoss
           loss_weight: 2.0
 data:
-  data_root: /S1/MIPL/zhaozj/data
+  data_root: /network_space/storage43/zhaozijing/datasets
   train:
     name: CocoDataset
     img_path: tencent/day_sunny
@@ -73,7 +74,6 @@ device:
   batchsize_per_gpu: 24
 schedule:
   load_model: ./checkpoints/nanodet_m_0.5x.ckpt
-  # load_model: ./outputs/tencent_day_sunny/model_best/model_best.ckpt
   optimizer:
     name: SGD
     lr: 0.05 # lr: 0.07

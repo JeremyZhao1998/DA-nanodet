@@ -1,5 +1,6 @@
 
 save_dir: outputs/tencent_sunny2heavy
+mode: teaching
 model:
   arch:
     name: OneStageDetector
@@ -40,7 +41,7 @@ model:
           name: GIoULoss
           loss_weight: 2.0
 data:
-  # data_root: /S1/MIPL/zhaozj/data
+  # data_root: /scratch/generalvision/zhaozijing/data
   data_root: /network_space/storage43/zhaozijing/datasets
   train:
     name: CocoDataset
@@ -70,7 +71,15 @@ data:
     keep_ratio: True
     pipeline:
       normalize: [[103.53, 116.28, 123.675], [57.375, 57.12, 58.395]]
-threshold: 0.3
+discriminators:
+  enable: False
+  dis_hidden_size: 32
+  dis_scale: 0.2
+threshold:
+  start_value: 0.4
+  max_value: 0.4
+  min_value: 0.4
+  gamma: 0.9
 ema_alpha: 0.9996
 device:
   gpu_ids: [0, 1]
@@ -81,19 +90,19 @@ schedule:
   load_model: ./checkpoints/tencent_day_sunny_source.ckpt
   optimizer:
     name: SGD
-    lr: 0.05 # lr: 0.07
+    lr: 0.03 # lr: 0.07
     momentum: 0.9
     weight_decay: 0.0001
   warmup:
     name: linear
     steps: 1000
     ratio: 0.00001
-  total_epochs: 200
+  total_epochs: 100
   lr_schedule:
     name: MultiStepLR
     milestones: [130,160,175]
     gamma: 0.1
-  val_intervals: 1
+  val_intervals: 5
 evaluator:
   name: CocoDetectionEvaluator
   save_key: mAP

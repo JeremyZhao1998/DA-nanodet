@@ -31,6 +31,7 @@ from nanodet.util import convert_avg_params, gather_results, mkdir
 
 from ..model.arch import build_model
 from ..model.weight_averager import build_weight_averager
+from ..model.loss.iou_loss import bbox_overlaps
 
 
 class TrainingTask(LightningModule):
@@ -234,7 +235,10 @@ class TrainingTask(LightningModule):
             optimizer
         """
         optimizer_cfg = copy.deepcopy(self.cfg.schedule.optimizer)
-        optimizer = build_optimizer(self.model, optimizer_cfg)
+        optimizer = build_optimizer(
+            torch.nn.ModuleList([self.model, self.discriminators]) if hasattr(self, 'discriminators') else self.model,
+            optimizer_cfg
+        )
 
         schedule_cfg = copy.deepcopy(self.cfg.schedule.lr_schedule)
         name = schedule_cfg.pop("name")
@@ -247,14 +251,14 @@ class TrainingTask(LightningModule):
         return dict(optimizer=optimizer, lr_scheduler=scheduler)
 
     def optimizer_step(
-        self,
-        epoch=None,
-        batch_idx=None,
-        optimizer=None,
-        optimizer_idx=None,
-        optimizer_closure=None,
-        on_tpu=None,
-        using_lbfgs=None,
+            self,
+            epoch=None,
+            batch_idx=None,
+            optimizer=None,
+            optimizer_idx=None,
+            optimizer_closure=None,
+            on_tpu=None,
+            using_lbfgs=None,
     ):
         """
         Performs a single optimization step (parameter update).
@@ -273,11 +277,11 @@ class TrainingTask(LightningModule):
                 k = self.cfg.schedule.warmup.ratio
             elif self.cfg.schedule.warmup.name == "linear":
                 k = 1 - (
-                    1 - self.trainer.global_step / self.cfg.schedule.warmup.steps
+                        1 - self.trainer.global_step / self.cfg.schedule.warmup.steps
                 ) * (1 - self.cfg.schedule.warmup.ratio)
             elif self.cfg.schedule.warmup.name == "exp":
                 k = self.cfg.schedule.warmup.ratio ** (
-                    1 - self.trainer.global_step / self.cfg.schedule.warmup.steps
+                        1 - self.trainer.global_step / self.cfg.schedule.warmup.steps
                 )
             else:
                 raise Exception("Unsupported warm up type!")
@@ -358,15 +362,83 @@ class TrainingTask(LightningModule):
                 self.logger.info("Loaded average state from checkpoint.")
 
 
+class GradReverse(torch.autograd.Function):
+
+    def __init__(self):
+        super(GradReverse, self).__init__()
+
+    @ staticmethod
+    def forward(ctx, x, lambda_):
+        ctx.save_for_backward(lambda_)
+        return x.view_as(x)
+
+    @ staticmethod
+    def backward(ctx, grad_output):
+        lambda_, = ctx.saved_tensors
+        grad_input = grad_output.clone()
+        return - lambda_ * grad_input, None
+
+
+class GradReverseLayer(torch.nn.Module):
+    def __init__(self, lambd=1):
+        super(GradReverseLayer, self).__init__()
+        self.lambd = lambd
+
+    def forward(self, x):
+        lam = torch.tensor(self.lambd)
+        return GradReverse.apply(x, lam)
+
+
+class MultiConv2d(torch.nn.Module):
+
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
+        super().__init__()
+        self.num_layers = num_layers
+        h = [hidden_dim] * (num_layers - 1)
+        self.layers = torch.nn.ModuleList(
+            torch.nn.Conv2d(n, k, kernel_size=(3, 3), padding=1) for n, k in zip([input_dim] + h, h + [output_dim])
+        )
+
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            x = torch.nn.functional.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
+        return x
+
+
 class TeachingTask(TrainingTask):
 
     def __init__(self, cfg, evaluator=None):
         super().__init__(cfg, evaluator)
+        # Teacher model
         self.teacher = build_model(cfg.model)
         for param in self.teacher.parameters():
             param.requires_grad = False
-        self.threshold = cfg.threshold
         self.ema_alpha = cfg.ema_alpha
+        # Discriminator
+        if cfg.discriminators.enable:
+            self.dis_hidden_size = cfg.discriminators.dis_hidden_size
+            self.discriminators = torch.nn.ModuleList(
+                [MultiConv2d(self.model.fpn.out_channels, self.dis_hidden_size, 2, 2)
+                    for _ in range(self.model.fpn.num_outs)]
+            )
+            self.dis_scale = cfg.dis_scale
+            self.grad_reverse = GradReverseLayer()
+        # Dynamic threshold
+        self.thresholds = [cfg.threshold.start_value for _ in range(cfg.model.arch.head.num_classes)]
+        self.source_logits = [0.0 for _ in range(cfg.model.arch.head.num_classes)]
+        self.source_logits_cnt = [0 for _ in range(cfg.model.arch.head.num_classes)]
+        self.gamma = cfg.threshold.gamma
+        self.min_dt = cfg.threshold.min_value
+        self.max_dt = cfg.threshold.max_value
+
+    def discriminator_forward(self, features, domain_label_value):
+        features = [self.grad_reverse(f) for f in features]
+        dis_preds = [dis(f).flatten(start_dim=2) for dis, f in zip(self.discriminators, features)]
+        dis_preds = torch.cat(dis_preds, dim=2)
+        domain_label = torch.zeros((dis_preds.shape[0], dis_preds.shape[2]), dtype=torch.long, device=dis_preds.device)
+        torch.fill(domain_label, domain_label_value)
+        loss = torch.nn.functional.cross_entropy(dis_preds, domain_label)
+        return loss
 
     def training_step(self, batch, batch_idx):
         # Pre-process batch
@@ -397,7 +469,7 @@ class TeachingTask(TrainingTask):
                 img_box, img_label = [], []
                 for label, data in value.items():
                     for proposal in data:
-                        if proposal[4] > self.threshold:
+                        if proposal[4] > self.thresholds[label]:
                             img_box.append(proposal[:4])
                             img_label.append(label)
                 pseudo_boxes.append(np.asarray(img_box, dtype=np.float32))
@@ -405,9 +477,42 @@ class TeachingTask(TrainingTask):
             batch_tgt_stu['gt_bboxes'] = pseudo_boxes
             batch_tgt_stu['gt_labels'] = pseudo_labels
         # Student forward
-        preds, loss, loss_states = self.model.forward_train(batch)
-        preds_tgt_stu, loss_tgt_stu, loss_states_tgt_stu = self.model.forward_train(batch_tgt_stu, pseudo=True)
+        preds, loss, loss_states = self.model.forward_train(batch, return_features=True)
+        preds_tgt_stu, loss_tgt_stu, loss_states_tgt_stu = self.model.forward_train(batch_tgt_stu, True, True)
+        # Record source logits
+        dets = self.model.head.post_process(preds[0], batch, pseudo=True)
+        for idx, (img_id, value) in enumerate(dets):
+            for label, data in value.items():
+                if len(data) == 0:
+                    continue
+                proposal_boxes = torch.tensor(data, device=preds[0].device)[:, :4]
+                gt_boxes = torch.tensor(batch['gt_bboxes'][idx], device=preds[0].device)
+                gt_labels = batch['gt_labels'][idx]
+                ious = bbox_overlaps(proposal_boxes, gt_boxes, mode='iou')
+                selected = torch.gt(ious, 0.5).nonzero()
+                for pair in selected:
+                    if label == gt_labels[pair[1]]:
+                        self.source_logits[label] += data[pair[0]][4]
+                        self.source_logits_cnt[label] += 1
+        # Loss
         loss += loss_tgt_stu
+        # Discriminator forward
+        if hasattr(self, 'discriminators'):
+            loss_dis = self.discriminator_forward(preds[1], 0) + self.discriminator_forward(preds_tgt_stu[1], 1)
+            loss += loss_dis * self.dis_scale
         loss_states['loss_tgt'] = loss_tgt_stu
+        # loss_states['loss_dis'] = loss_dis
         self.log_training_losses(batch_idx, loss_states)
         return loss
+
+    def training_epoch_end(self, outputs: List[Any]) -> None:
+        self.trainer.save_checkpoint(os.path.join(self.cfg.save_dir, "model_last.ckpt"))
+        source_logits_mean = [logit / cnt if cnt > 0 else 0.0
+                              for logit, cnt in zip(self.source_logits, self.source_logits_cnt)]
+        print('Logits means: ', source_logits_mean)
+        self.thresholds = [np.clip(mean * (1 - self.gamma) + self.gamma * threshold,
+                                   self.min_dt, self.max_dt)
+                           for mean, threshold in zip(source_logits_mean, self.thresholds)]
+        print('New thresholds: ', self.thresholds)
+        self.source_logits = [0.0 for _ in range(self.cfg.model.arch.head.num_classes)]
+        self.source_logits_cnt = [0 for _ in range(self.cfg.model.arch.head.num_classes)]

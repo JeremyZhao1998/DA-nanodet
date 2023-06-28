@@ -164,8 +164,10 @@ def teaching():
 
 
 def main():
-    # source_only()
-    teaching()
+    if cfg.mode == 'teaching':
+        teaching()
+    elif cfg.mode == 'source_only':
+        source_only()
 
 
 if __name__ == "__main__":
