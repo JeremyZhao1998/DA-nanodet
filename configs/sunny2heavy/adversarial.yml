@@ -1,6 +1,6 @@
 
-save_dir: outputs/tencent_sunny2heavy
-mode: teaching
+save_dir: outputs/sunny2heavy/adversarial
+mode: alignment
 model:
   arch:
     name: OneStageDetector
@@ -16,6 +16,7 @@ model:
       start_level: 0
       num_outs: 3
     head:
+      enable: False
       name: NanoDetHead
       num_classes: 4
       input_channel: 96
@@ -71,41 +72,38 @@ data:
     keep_ratio: True
     pipeline:
       normalize: [[103.53, 116.28, 123.675], [57.375, 57.12, 58.395]]
+src_loss_scale: 1.0
+tgt_loss_scale: 0.0
 discriminators:
-  enable: False
+  enable: True
   dis_hidden_size: 32
-  dis_scale: 0.2
-threshold:
-  start_value: 0.4
-  max_value: 0.4
-  min_value: 0.4
-  gamma: 0.9
-ema_alpha: 0.9996
+  dis_scale: 1.0
+features_gt:
+  enable: False
 device:
   gpu_ids: [0, 1]
   workers_per_gpu: 8
   batchsize_per_gpu: 24
 schedule:
-  # load_model: ./checkpoints/nanodet_m_0.5x.ckpt
-  load_model: ./checkpoints/tencent_day_sunny_source.ckpt
+  load_model: ./checkpoints/sunny2heavy/source_only.ckpt
   optimizer:
     name: SGD
-    lr: 0.03 # lr: 0.07
+    lr: 0.01
     momentum: 0.9
     weight_decay: 0.0001
   warmup:
     name: linear
     steps: 1000
     ratio: 0.00001
-  total_epochs: 100
+  total_epochs: 20
   lr_schedule:
     name: MultiStepLR
-    milestones: [130,160,175]
+    milestones: [15]
     gamma: 0.1
   val_intervals: 5
 evaluator:
   name: CocoDetectionEvaluator
-  save_key: mAP
+  save_key: AP_50
 
 log:
   interval: 50

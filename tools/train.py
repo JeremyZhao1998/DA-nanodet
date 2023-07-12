@@ -24,7 +24,7 @@ from pytorch_lightning.callbacks import TQDMProgressBar
 from nanodet.data.collate import naive_collate
 from nanodet.data.dataset import build_dataset
 from nanodet.evaluator import build_evaluator
-from nanodet.trainer.task import TrainingTask, TeachingTask
+from nanodet.trainer.task import TrainingTask, TeachingTask, AlignmentTask
 from nanodet.util import (
     NanoDetLightningLogger,
     set_print,
@@ -129,45 +129,29 @@ def set_trainer():
     return trainer
 
 
-def source_only():
+def main():
     # Setup data
     logger.info("Setting up data...")
-    train_dataset = build_dataset(cfg.data.train, "train", cfg.data.data_root)
-    val_dataset = build_dataset(cfg.data.val, "test", cfg.data.data_root)
-    evaluator = build_evaluator(cfg.evaluator, val_dataset)
-    train_dataloader = build_dataloader(train_dataset, is_train=True)
-    val_dataloader = build_dataloader(val_dataset, is_train=False)
-    # Create model
-    logger.info("Creating model...")
-    task = TrainingTask(cfg, evaluator)
-    load_weights(task)
-    # Create trainer and start training
-    trainer = set_trainer()
-    trainer.fit(task, train_dataloader, val_dataloader)
-
-
-def teaching():
-    # Setup data
-    logger.info("Setting up data...")
-    train_dataset = build_dataset(cfg.data.train, "train", cfg.data.data_root, teaching=True)
+    if cfg.mode == 'source_only':
+        train_dataset = build_dataset(cfg.data.train, "train", cfg.data.data_root)
+    else:
+        train_dataset = build_dataset(cfg.data.train, "train", cfg.data.data_root, teaching=True)
     val_dataset = build_dataset(cfg.data.val, "test", cfg.data.data_root)
     evaluator = build_evaluator(cfg.evaluator, val_dataset)
     source_dataloader = build_dataloader(train_dataset, is_train=True)
     val_dataloader = build_dataloader(val_dataset, is_train=False)
     # Create model
     logger.info("Creating model...")
-    task = TeachingTask(cfg, evaluator)
+    if cfg.mode == 'source_only':
+        task = TrainingTask(cfg, evaluator)
+    elif cfg.mode == 'alignment':
+        task = AlignmentTask(cfg, evaluator)
+    else:
+        task = TeachingTask(cfg, evaluator)
     load_weights(task)
     # Create trainer and start training
     trainer = set_trainer()
     trainer.fit(task, source_dataloader, val_dataloader)
-
-
-def main():
-    if cfg.mode == 'teaching':
-        teaching()
-    elif cfg.mode == 'source_only':
-        source_only()
 
 
 if __name__ == "__main__":
@@ -175,4 +159,5 @@ if __name__ == "__main__":
     logger = set_env()
     logger.dump_cfg(cfg)
     set_random_seed()
+    assert cfg.mode in ['source_only', 'alignment', 'teaching']
     main()

@@ -18,6 +18,7 @@ import json
 import os
 import warnings
 from typing import Any, Dict, List
+from tqdm import tqdm
 
 import torch
 import torch.distributed as dist
@@ -414,15 +415,7 @@ class TeachingTask(TrainingTask):
         for param in self.teacher.parameters():
             param.requires_grad = False
         self.ema_alpha = cfg.ema_alpha
-        # Discriminator
-        if cfg.discriminators.enable:
-            self.dis_hidden_size = cfg.discriminators.dis_hidden_size
-            self.discriminators = torch.nn.ModuleList(
-                [MultiConv2d(self.model.fpn.out_channels, self.dis_hidden_size, 2, 2)
-                    for _ in range(self.model.fpn.num_outs)]
-            )
-            self.dis_scale = cfg.dis_scale
-            self.grad_reverse = GradReverseLayer()
+        self.tgt_loss_scale = cfg.tgt_loss_scale
         # Dynamic threshold
         self.thresholds = [cfg.threshold.start_value for _ in range(cfg.model.arch.head.num_classes)]
         self.source_logits = [0.0 for _ in range(cfg.model.arch.head.num_classes)]
@@ -431,55 +424,27 @@ class TeachingTask(TrainingTask):
         self.min_dt = cfg.threshold.min_value
         self.max_dt = cfg.threshold.max_value
 
-    def discriminator_forward(self, features, domain_label_value):
-        features = [self.grad_reverse(f) for f in features]
-        dis_preds = [dis(f).flatten(start_dim=2) for dis, f in zip(self.discriminators, features)]
-        dis_preds = torch.cat(dis_preds, dim=2)
-        domain_label = torch.zeros((dis_preds.shape[0], dis_preds.shape[2]), dtype=torch.long, device=dis_preds.device)
-        torch.fill(domain_label, domain_label_value)
-        loss = torch.nn.functional.cross_entropy(dis_preds, domain_label)
-        return loss
+    def _ema_update(self):
+        state_dict, student_state_dict = self.teacher.state_dict(), self.model.state_dict()
+        for key, value in state_dict.items():
+            state_dict[key] = self.ema_alpha * value + (1 - self.ema_alpha) * student_state_dict[key].detach()
+        self.teacher.load_state_dict(state_dict)
 
-    def training_step(self, batch, batch_idx):
-        # Pre-process batch
-        batch_tgt_stu, batch_tgt_tch = {}, {}
-        original_keys = list(batch.keys())
-        for key in original_keys:
-            if key.endswith('tgt_stu'):
-                batch_tgt_stu[key[:-8]] = batch.pop(key)
-            if key.endswith('tgt_tch'):
-                batch_tgt_tch[key[:-8]] = batch.pop(key)
-        batch = self._preprocess_batch_input(batch)
-        batch_tgt_tch = self._preprocess_batch_input(batch_tgt_tch)
-        batch_tgt_stu = self._preprocess_batch_input(batch_tgt_stu)
-        # Teacher forward
-        with torch.no_grad():
-            # EMA
-            state_dict, student_state_dict = self.teacher.state_dict(), self.model.state_dict()
-            for key, value in state_dict.items():
-                state_dict[key] = self.ema_alpha * value + (1 - self.ema_alpha) * student_state_dict[key].detach()
-            self.teacher.load_state_dict(state_dict)
-            # Teacher forward
-            preds_tgt_tch, _, _ = self.teacher.forward_train(batch_tgt_tch)
-            dets_tgt_tch = self.teacher.head.post_process(preds_tgt_tch, batch_tgt_tch, pseudo=True)
-            # Select pseudo labels
-            img_ids, pseudo_boxes, pseudo_labels = [], [], []
-            for img_id, value in dets_tgt_tch:
-                img_ids.append(img_id)
-                img_box, img_label = [], []
-                for label, data in value.items():
-                    for proposal in data:
-                        if proposal[4] > self.thresholds[label]:
-                            img_box.append(proposal[:4])
-                            img_label.append(label)
-                pseudo_boxes.append(np.asarray(img_box, dtype=np.float32))
-                pseudo_labels.append(np.asarray(img_label, dtype=np.int64))
-            batch_tgt_stu['gt_bboxes'] = pseudo_boxes
-            batch_tgt_stu['gt_labels'] = pseudo_labels
-        # Student forward
-        preds, loss, loss_states = self.model.forward_train(batch, return_features=True)
-        preds_tgt_stu, loss_tgt_stu, loss_states_tgt_stu = self.model.forward_train(batch_tgt_stu, True, True)
-        # Record source logits
+    def _select_pseudo_labels(self, dets_tgt_tch):
+        img_ids, pseudo_boxes, pseudo_labels = [], [], []
+        for img_id, value in dets_tgt_tch:
+            img_ids.append(img_id)
+            img_box, img_label = [], []
+            for label, data in value.items():
+                for proposal in data:
+                    if proposal[4] > self.thresholds[label]:
+                        img_box.append(proposal[:4])
+                        img_label.append(label)
+            pseudo_boxes.append(np.asarray(img_box, dtype=np.float32))
+            pseudo_labels.append(np.asarray(img_label, dtype=np.int64))
+        return pseudo_boxes, pseudo_labels
+
+    def _record_source_logits(self, batch, preds):
         dets = self.model.head.post_process(preds[0], batch, pseudo=True)
         for idx, (img_id, value) in enumerate(dets):
             for label, data in value.items():
@@ -494,14 +459,42 @@ class TeachingTask(TrainingTask):
                     if label == gt_labels[pair[1]]:
                         self.source_logits[label] += data[pair[0]][4]
                         self.source_logits_cnt[label] += 1
+
+    def _preprocess_teaching_batch(self, batch):
+        batch_tgt_stu, batch_tgt_tch = {}, {}
+        original_keys = list(batch.keys())
+        for key in original_keys:
+            if key.endswith('tgt_stu'):
+                batch_tgt_stu[key[:-8]] = batch.pop(key)
+            if key.endswith('tgt_tch'):
+                batch_tgt_tch[key[:-8]] = batch.pop(key)
+        batch = self._preprocess_batch_input(batch)
+        batch_tgt_tch = self._preprocess_batch_input(batch_tgt_tch)
+        batch_tgt_stu = self._preprocess_batch_input(batch_tgt_stu)
+        return batch, batch_tgt_stu, batch_tgt_tch
+
+    def training_step(self, batch, batch_idx):
+        # Pre-process batch
+        batch, batch_tgt_stu, batch_tgt_tch = self._preprocess_teaching_batch(batch)
+        # Teacher forward
+        with torch.no_grad():
+            # EMA
+            self._ema_update()
+            # Teacher forward
+            preds_tgt_tch, _, _ = self.teacher.forward_train(batch_tgt_tch)
+            dets_tgt_tch = self.teacher.head.post_process(preds_tgt_tch, batch_tgt_tch, pseudo=True)
+            # Select pseudo labels
+            pseudo_boxes, pseudo_labels = self._select_pseudo_labels(dets_tgt_tch)
+            batch_tgt_stu['gt_bboxes'] = pseudo_boxes
+            batch_tgt_stu['gt_labels'] = pseudo_labels
+        # Student forward
+        preds, loss, loss_states = self.model.forward_train(batch, return_features=True)
+        preds_tgt_stu, loss_tgt_stu, loss_states_tgt_stu = self.model.forward_train(batch_tgt_stu, True, True)
+        # Record source logits
+        self._record_source_logits(batch, preds)
         # Loss
-        loss += loss_tgt_stu
-        # Discriminator forward
-        if hasattr(self, 'discriminators'):
-            loss_dis = self.discriminator_forward(preds[1], 0) + self.discriminator_forward(preds_tgt_stu[1], 1)
-            loss += loss_dis * self.dis_scale
-        loss_states['loss_tgt'] = loss_tgt_stu
-        # loss_states['loss_dis'] = loss_dis
+        loss += self.tgt_loss_scale * loss_tgt_stu
+        loss_states['loss_tgt'] = self.tgt_loss_scale * loss_tgt_stu
         self.log_training_losses(batch_idx, loss_states)
         return loss
 
@@ -516,3 +509,79 @@ class TeachingTask(TrainingTask):
         print('New thresholds: ', self.thresholds)
         self.source_logits = [0.0 for _ in range(self.cfg.model.arch.head.num_classes)]
         self.source_logits_cnt = [0 for _ in range(self.cfg.model.arch.head.num_classes)]
+
+
+class AlignmentTask(TrainingTask):
+
+    def __init__(self, cfg, evaluator=None):
+        super().__init__(cfg, evaluator)
+        # Detection loss scale
+        self.src_loss_scale = cfg.src_loss_scale
+        self.tgt_loss_scale = cfg.tgt_loss_scale
+        # Discriminator
+        if cfg.discriminators.enable:
+            self.dis_hidden_size = cfg.discriminators.dis_hidden_size
+            self.discriminators = torch.nn.ModuleList(
+                [MultiConv2d(self.model.fpn.out_channels, self.dis_hidden_size, 2, 2)
+                 for _ in range(self.model.fpn.num_outs)]
+            )
+            self.dis_scale = cfg.discriminators.dis_scale
+            self.grad_reverse = GradReverseLayer()
+        # Feature projector
+        if cfg.features_gt.enable:
+            self.pooling = torch.nn.AvgPool2d(3)
+            self.projector = torch.nn.Conv2d(
+                in_channels=cfg.model.arch.fpn.out_channels,
+                out_channels=cfg.features_size[0],
+                kernel_size=1
+            )
+            self.features_dir = cfg.features_dir
+            self.features_scale = cfg.features_scale
+
+    def discriminator_forward(self, features, domain_label_value):
+        features = [self.grad_reverse(f) for f in features]
+        dis_preds = [dis(f).flatten(start_dim=2) for dis, f in zip(self.discriminators, features)]
+        dis_preds = torch.cat(dis_preds, dim=2)
+        domain_label = torch.zeros((dis_preds.shape[0], dis_preds.shape[2]), dtype=torch.long, device=dis_preds.device)
+        torch.fill(domain_label, domain_label_value)
+        loss = torch.nn.functional.cross_entropy(dis_preds, domain_label)
+        return loss
+
+    def _get_features(self, batch_tgt):
+        features = []
+        for img_id in batch_tgt['img_info']['id']:
+            file_name = os.path.join(self.features_dir, str(img_id) + '.npy')
+            features.append(torch.from_numpy(np.load(file_name)))
+        features = torch.stack(features, dim=0).to(batch_tgt['img'].device)
+        return self.pooling(features)
+
+    def training_step(self, batch, batch_idx):
+        # Pre-process batch
+        batch_tgt = {}
+        for key in list(batch.keys()):
+            if key.endswith('tgt_tch'):
+                batch_tgt[key[:-8]] = batch.pop(key)
+        batch = self._preprocess_batch_input(batch)
+        batch_tgt = self._preprocess_batch_input(batch_tgt)
+        # Model forward
+        preds, loss, loss_states = self.model.forward_train(batch, return_features=True)
+        preds_tgt, loss_tgt, loss_states_tgt = self.model.forward_train(batch_tgt, return_features=True)
+        loss *= self.src_loss_scale
+        for key, value in loss_states.items():
+            loss_states[key] *= self.src_loss_scale
+        loss += self.tgt_loss_scale * loss_tgt
+        loss_states['loss_tgt'] = self.tgt_loss_scale * loss_tgt
+        # Discriminator forward
+        if hasattr(self, 'discriminators'):
+            loss_dis = self.discriminator_forward(preds[1], 0) + self.discriminator_forward(preds_tgt[1], 1)
+            loss += loss_dis * self.dis_scale
+            loss_states['loss_dis'] = loss_dis
+        # Feature alignment
+        if hasattr(self, 'projector'):
+            features = preds_tgt[1][-1]
+            features_gt = self._get_features(batch_tgt)
+            loss_features = torch.nn.functional.mse_loss(self.projector(features), features_gt)
+            loss += self.features_scale * loss_features
+            loss_states['loss_features'] = loss_features
+        self.log_training_losses(batch_idx, loss_states)
+        return loss
