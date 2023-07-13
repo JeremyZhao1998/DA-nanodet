@@ -84,7 +84,7 @@ device:
   workers_per_gpu: 8
   batchsize_per_gpu: 24
 schedule:
-  load_model: ./checkpoints/camera_a2b/adversarial.ckpt
+  load_model: ./checkpoints/camera_a2b/source_only.ckpt
   optimizer:
     name: SGD
     lr: 0.02

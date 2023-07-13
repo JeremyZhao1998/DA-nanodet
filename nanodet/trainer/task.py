@@ -529,14 +529,15 @@ class AlignmentTask(TrainingTask):
             self.grad_reverse = GradReverseLayer()
         # Feature projector
         if cfg.features_gt.enable:
-            self.pooling = torch.nn.AvgPool2d(3)
+            self.features_path = os.path.join(cfg.data.data_root, cfg.features_gt.features_path)
+            print('Loading features from: ', self.features_path)
+            self.features_gt = torch.from_numpy(np.load(self.features_path))
             self.projector = torch.nn.Conv2d(
                 in_channels=cfg.model.arch.fpn.out_channels,
-                out_channels=cfg.features_size[0],
+                out_channels=cfg.features_gt.size[0],
                 kernel_size=1
             )
-            self.features_dir = cfg.features_dir
-            self.features_scale = cfg.features_scale
+            self.features_scale = cfg.features_gt.scale
 
     def discriminator_forward(self, features, domain_label_value):
         features = [self.grad_reverse(f) for f in features]
@@ -547,13 +548,9 @@ class AlignmentTask(TrainingTask):
         loss = torch.nn.functional.cross_entropy(dis_preds, domain_label)
         return loss
 
-    def _get_features(self, batch_tgt):
-        features = []
-        for img_id in batch_tgt['img_info']['id']:
-            file_name = os.path.join(self.features_dir, str(img_id) + '.npy')
-            features.append(torch.from_numpy(np.load(file_name)))
-        features = torch.stack(features, dim=0).to(batch_tgt['img'].device)
-        return self.pooling(features)
+    def _get_features(self, batch):
+        features = self.features_gt[batch['img_info']['id']].to(batch['img'].device)
+        return features
 
     def training_step(self, batch, batch_idx):
         # Pre-process batch

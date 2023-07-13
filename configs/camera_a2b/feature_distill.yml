@@ -1,6 +1,6 @@
 
-save_dir: outputs/sunny2heavy/source_only
-mode: source_only
+save_dir: outputs/camera_a2b/feature_distill
+mode: alignment
 model:
   arch:
     name: OneStageDetector
@@ -45,8 +45,10 @@ data:
   data_root: /network_space/storage43/zhaozijing/datasets
   train:
     name: CocoDataset
-    img_path: tencent/day_sunny
-    ann_path: tencent/day_sunny/annotations/train_coco_style.json
+    img_path: tencent/camera_a
+    ann_path: tencent/camera_a/annotations/train_coco_style.json
+    tgt_img_path: tencent/camera_b
+    tgt_ann_path: tencent/camera_b/annotations/train_coco_style.json
     input_size: [448,256] #[w,h]
     keep_ratio: True
     pipeline:
@@ -63,33 +65,44 @@ data:
       normalize: [[103.53, 116.28, 123.675], [57.375, 57.12, 58.395]]
   val:
     name: CocoDataset
-    img_path: tencent/day_sunny
-    ann_path: tencent/day_sunny/annotations/val_coco_style.json
+    img_path: tencent/camera_b
+    ann_path: tencent/camera_b/annotations/val_coco_style.json
     input_size: [448,256] #[w,h]
     keep_ratio: True
     pipeline:
       normalize: [[103.53, 116.28, 123.675], [57.375, 57.12, 58.395]]
+src_loss_scale: 1.0
+tgt_loss_scale: 0.0
+discriminators:
+  enable: False
+  dis_hidden_size: 32
+  dis_scale: 1.0
+features_gt:
+  enable: True
+  features_path: ../tmp_files/camera_a2b/features_all.npy
+  size: [2048, 8, 14]
+  scale: 1.0
 device:
-  gpu_ids: [0,1]
+  gpu_ids: [0, 1]
   workers_per_gpu: 8
   batchsize_per_gpu: 24
 schedule:
-  load_model: ./checkpoints/coco_pretrained/nanodet_m_0.5x.ckpt
+  load_model: ./checkpoints/camera_a2b/source_only.ckpt
   optimizer:
     name: SGD
-    lr: 0.05
+    lr: 0.01
     momentum: 0.9
     weight_decay: 0.0001
   warmup:
     name: linear
     steps: 1000
     ratio: 0.00001
-  total_epochs: 200
+  total_epochs: 20
   lr_schedule:
     name: MultiStepLR
-    milestones: [130,160,175]
+    milestones: [15]
     gamma: 0.1
-  val_intervals: 10
+  val_intervals: 5
 evaluator:
   name: CocoDetectionEvaluator
   save_key: AP_50

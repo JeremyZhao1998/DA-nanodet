@@ -135,7 +135,7 @@ def main():
     if cfg.mode == 'source_only':
         train_dataset = build_dataset(cfg.data.train, "train", cfg.data.data_root)
     else:
-        train_dataset = build_dataset(cfg.data.train, "train", cfg.data.data_root, teaching=True)
+        train_dataset = build_dataset(cfg.data.train, "train", cfg.data.data_root, cross_domain=True)
     val_dataset = build_dataset(cfg.data.val, "test", cfg.data.data_root)
     evaluator = build_evaluator(cfg.evaluator, val_dataset)
     source_dataloader = build_dataloader(train_dataset, is_train=True)

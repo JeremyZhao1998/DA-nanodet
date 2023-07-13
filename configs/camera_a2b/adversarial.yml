@@ -16,7 +16,6 @@ model:
       start_level: 0
       num_outs: 3
     head:
-      enable: False
       name: NanoDetHead
       num_classes: 4
       input_channel: 96

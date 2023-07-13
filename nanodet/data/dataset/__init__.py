@@ -17,10 +17,10 @@ import os
 import copy
 import warnings
 
-from .coco import CocoDataset, CocoDatasetTeaching
+from .coco import CocoDataset, CocoDatasetCrossDomain
 
 
-def build_dataset(cfg, mode, data_root=None, teaching=False):
+def build_dataset(cfg, mode, data_root=None, cross_domain=False):
     dataset_cfg = copy.deepcopy(cfg)
     name = dataset_cfg.pop("name")
     if data_root is not None:
@@ -28,8 +28,8 @@ def build_dataset(cfg, mode, data_root=None, teaching=False):
             if key.endswith('path'):
                 dataset_cfg[key] = os.path.join(data_root, dataset_cfg[key])
     if name == "CocoDataset":
-        if teaching:
-            return CocoDatasetTeaching(mode=mode, **dataset_cfg)
+        if cross_domain:
+            return CocoDatasetCrossDomain(mode=mode, **dataset_cfg)
         return CocoDataset(mode=mode, **dataset_cfg)
     else:
         warnings.warn(

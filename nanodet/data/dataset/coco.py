@@ -195,7 +195,7 @@ class CocoDataset(BaseDataset):
         return self.get_train_data(idx)
 
 
-class CocoDatasetTeaching(CocoDataset):
+class CocoDatasetCrossDomain(CocoDataset):
 
     def __init__(self,
                  img_path: str,
